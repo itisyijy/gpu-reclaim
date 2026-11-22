@@ -1,0 +1,16 @@
+/env/
+/downloads/
+/upstream/
+/data/raw
+/data/interim/*
+/data/processed/*
+!/data/interim/.gitkeep
+!/data/processed/.gitkeep
+/.cache/
+/outputs/*
+!/outputs/.gitkeep
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+/notebooks/clusterdata

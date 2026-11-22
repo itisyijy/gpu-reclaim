@@ -1,0 +1,22 @@
+name: gpu-reclaim
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - polars
+  - pyyaml
+  - seaborn
+  - scipy
+  - statsmodels
+  - ipykernel
+  - python-duckdb=1.5.5
+  - jupyterlab
+  - numpy=2.2.6
+  - tqdm
+  - lightgbm
+  - pyarrow
+  - xgboost
+  - scikit-learn
+  - matplotlib=3.10.9
+  - pip
+  - pandas
