@@ -29,7 +29,10 @@ def connect(threads: int = 8, memory_limit: str = "48GB", database: str = ":memo
         "temp_directory": str(DUCKDB_SPILL),
     })
     con.execute("SET preserve_insertion_order=false")
-    con.execute("SET enable_progress_bar=false")
+    try:  # Jupyter에서는 ipywidgets가 없으면 이 설정 자체가 오류가 난다
+        con.execute("SET enable_progress_bar=false")
+    except duckdb.Error:
+        pass
     for view, folder in [("daily", DAILY_DIR), ("week", WEEK_DIR)]:
         if any(folder.glob("*.parquet")):
             con.execute(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM read_parquet('{_q(folder / '*.parquet')}')")

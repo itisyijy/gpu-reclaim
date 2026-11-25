@@ -1,0 +1,934 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>통합 결과 보고서</title><style>
+@page { size: A4 portrait; margin: 14mm 13mm 14mm 13mm; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: 'Noto Sans CJK KR', 'Noto Sans KR', sans-serif; font-size: 9.6pt; line-height: 1.55; color: #1d1d1f; }
+h1 { font-size: 17pt; margin: 0 0 4mm; border-bottom: 2px solid #1f6fb4; padding-bottom: 2mm; }
+h2 { font-size: 13.5pt; margin: 7mm 0 3mm; color: #1f6fb4; break-after: avoid; page-break-after: avoid; }
+h3 { font-size: 11pt; margin: 5mm 0 2mm; padding: 1.2mm 2.5mm; background: #eef4fb; border-left: 3px solid #1f6fb4;
+     break-after: avoid; page-break-after: avoid; }
+p, li { margin: 1mm 0; }
+ul, ol { padding-left: 5mm; margin: 1mm 0; }
+blockquote { margin: 2mm 0; padding: 2mm 3.5mm; background: #f6f8fa; border-left: 3px solid #8c8c8c; }
+blockquote p { margin: 0.6mm 0; }
+table { border-collapse: collapse; width: 100%; margin: 2mm 0 3mm; font-size: 8.6pt; break-inside: auto; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+thead { display: table-header-group; }
+th, td { border: 1px solid #cfd6de; padding: 1mm 1.6mm; vertical-align: top; word-break: keep-all; overflow-wrap: anywhere; }
+th { background: #f0f3f6; text-align: left; }
+code { font-family: 'Noto Sans Mono CJK KR', monospace; font-size: 8.4pt; background: #f3f4f6; padding: 0 1mm; border-radius: 2px; }
+pre { background: #f3f4f6; padding: 2mm 3mm; font-size: 8.2pt; white-space: pre-wrap; break-inside: avoid; }
+pre code { background: none; padding: 0; }
+.fig { margin: 2mm 0 3mm; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+.fig img { max-width: 100%; max-height: 105mm; }
+hr { border: none; border-top: 1px solid #d0d7de; margin: 4mm 0; }
+</style></head><body><h1>통합 결과 보고서 — 슬라이드 제작용</h1>
+<p><strong>프로젝트:</strong> Predicting Tomorrow's Idle GPUs (Alibaba MaaS trace v2026)<br />
+<strong>작성:</strong> 2026-11-24 · 수치 출처: 최종 노트북 실행본(오류 0) + v4 견고성 실험</p>
+<p>이 문서만 보고 누구나 발표 슬라이드를 만들 수 있게 썼다.</p>
+<ul>
+<li>슬라이드마다 <strong>핵심 메시지 → 그림/표 파일 → 넣을 숫자 → 발표 노트 → 주의할 점</strong> 순서로 적었다.</li>
+<li>그림은 <code>figures/</code>, 그림과 표의 원본값은 <code>data/</code>(CSV, 엑셀에서 바로 열림)에 있다.</li>
+</ul>
+<hr />
+<h2>0. 먼저 읽을 것</h2>
+<h3>폴더 구성</h3>
+<pre><code>reports/slide_report/
+  README.md      ← 이 문서
+  figures/       ← 슬라이드에 바로 붙일 그림 (PNG, 한글)
+  data/          ← 그림·표의 원본값 (CSV, UTF-8 BOM) + numbers.json
+</code></pre>
+<h3>용어 (슬라이드 전체에서 이 뜻으로 통일)</h3>
+<table>
+<thead>
+<tr>
+<th>용어</th>
+<th>뜻</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>app-day</td>
+<td>app 하나의 하루. 분석 단위</td>
+</tr>
+<tr>
+<td>내일 idle</td>
+<td>내일 그 app의 GPU가 일하지 않은 시간 비율이 90% 이상 (20초 관측 기준)</td>
+</tr>
+<tr>
+<td>회수</td>
+<td>오늘 밤 그 app의 GPU를 거둬들여 내일 다른 곳에 쓰는 것</td>
+</tr>
+<tr>
+<td>회수 GPU-h</td>
+<td>회수했고 실제로 내일 idle이었던 app의 내일 GPU-h. 클수록 좋음</td>
+</tr>
+<tr>
+<td>잘못 회수 (건수)</td>
+<td>회수했는데 내일 idle이 아니었던 app-day 수. cold start 사건 수에 해당</td>
+</tr>
+<tr>
+<td>잘못 회수 GPU-h</td>
+<td>잘못 회수한 app이 내일 쓴 GPU-h. 방해받은 서비스 규모. 작을수록 좋음</td>
+</tr>
+<tr>
+<td>Baseline 1 (B1)</td>
+<td>"오늘 거의 idle이면 내일 회수"하는 단순 규칙. 운영자가 바로 쓸 수 있는 기준</td>
+</tr>
+<tr>
+<td>단순 규칙 (idle_ratio 상위)</td>
+<td>오늘 idle 비율이 높은 순으로 원하는 개수만큼 회수. B1을 개수 조절이 가능하게 만든 것</td>
+</tr>
+<tr>
+<td>같은 개수 정책</td>
+<td>매일 B1이 회수하는 개수만큼(또는 그 비율만큼) 모델 점수 상위를 회수. threshold도 정답도 필요 없음</td>
+</tr>
+<tr>
+<td>홀드아웃</td>
+<td>day 147–180(5주). 모델 개발에 전혀 쓰지 않은 기간. <strong>주 결과는 이 구간 기준</strong></td>
+</tr>
+<tr>
+<td>95% 구간</td>
+<td>app을 복원 추출한 부트스트랩 2,000회의 2.5–97.5% 범위. 구간이 0을 넘지 않으면 "유의"</td>
+</tr>
+</tbody>
+</table>
+<h3>한 줄 결론 (마지막 슬라이드와 요약 슬라이드에 그대로 사용)</h3>
+<blockquote>
+<p><strong>"오늘 idle이면 회수"라는 단순 규칙이 이미 강하다. 모델이 회수량을 늘리지는 못한다. 대신 같은 개수를 회수할 때 언제나 덜 위험한 app을 고른다.</strong>
+B1과 같은 개수에서는 잘못 회수 GPU-h가 −13%다. 조금 보수적으로(B1의 90%) 운영하면, 같은 개수의 단순 규칙보다 회수는 1.6%만 줄고 잘못 회수 GPU-h는 −48%, 잘못 회수 건수는 −20%다.</p>
+</blockquote>
+<h3>핵심 숫자 6개</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>숫자</th>
+<th>의미</th>
+<th>출처</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>90%</strong></td>
+<td>B1이 내일 idle GPU-h의 90%를 회수 (recall 0.899)</td>
+<td><code>data/04</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>42%</strong></td>
+<td>B1이 회수한 app-day 중 다음날 한 번이라도 활동한 비율 (5분 단위)</td>
+<td><code>data/16</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>−12.6%</strong></td>
+<td>같은 개수에서 최종 모델의 잘못 회수 GPU-h (B1 대비, 유의)</td>
+<td><code>data/04</code>, <code>data/05</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>+0.009</strong></td>
+<td>같은 개수에서 F1 향상 (0.873 → 0.882, 유의)</td>
+<td><code>data/05</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>−48%</strong></td>
+<td>90% 운영 시 같은 개수의 단순 규칙 대비 잘못 회수 GPU-h (유의)</td>
+<td><code>data/07</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>주당 70만 GPU-h</strong></td>
+<td>B1 규칙의 주당 회수량. GPU 약 4,200장을 일주일 비우는 양</td>
+<td><code>data/19</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>1. 슬라이드 구성안 (본문 14장 + 부록)</h2>
+<h3 class="slide">S1. 표지</h3>
+<ul>
+<li>제목: <em>Predicting Tomorrow's Idle GPUs — LLM 추론 GPU 회수를 위한 유휴 예측</em></li>
+<li>부제: Alibaba MaaS trace v2026 (6개월, 1.45억 행)</li>
+</ul>
+<h3 class="slide">S2. 배경과 문제</h3>
+<p><strong>핵심 메시지:</strong> LLM 추론 서비스는 요청이 없어도 GPU를 붙잡아 둔다. 놀고 있는 GPU를 회수하면 비용을 줄이지만, 잘못 회수하면 cold start가 생긴다.</p>
+<ul>
+<li>왼쪽: "모두 띄워 둠 → GPU 낭비". 오른쪽: "공격적으로 회수 → cold start 지연". 그 사이의 맞바꿈을 그린다.</li>
+<li>문제 한 줄: <strong>오늘까지의 기록으로, 내일 거의 쓰이지 않을 app을 골라낼 수 있는가?</strong></li>
+<li>발표 노트: Alibaba MaaS는 약 7만 개 모델 변형을 10만 장 넘는 GPU에서 서비스한다(제안서 인용). 수요는 소수 app에 몰려 있어서, 대부분의 app은 회수 후보다.</li>
+</ul>
+<h3 class="slide">S3. 데이터 구축</h3>
+<p><strong>핵심 메시지:</strong> 원시 운영 로그를 직접 집계하고 결합해서 분석용 데이터셋을 만들었다. 잘 정리된 데이터셋을 그대로 쓰지 않았다.</p>
+<table>
+<thead>
+<tr>
+<th>원시 표</th>
+<th>규모</th>
+<th>쓴 곳</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>instance_daily</td>
+<td>1.45억 행, day 0–181</td>
+<td>라벨과 입력 변수 전부</td>
+</tr>
+<tr>
+<td>instance_week_5min</td>
+<td>1.41억 행, day 140–146</td>
+<td>실제 cold start 확인 (5분 단위 시뮬레이션)</td>
+</tr>
+<tr>
+<td>app_metrics</td>
+<td>7,401행</td>
+<td>(메타데이터 참고)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>결과물: <strong>app × day 535,846행, app 20,661개, day 0–180</strong> (<code>data/01_dataset_splits.csv</code>)</li>
+<li>처리 순서: 정제 → app×day 집계 → 오늘 idle 비율 계산 → 과거 기록 변수(전날 idle, 연속 idle 일수) → 내일 라벨 붙이기</li>
+<li>online이 91.4%, offline이 8.6%다.</li>
+</ul>
+<h3 class="slide">S4. 문제 정의</h3>
+<p><strong>핵심 메시지:</strong> 분류 문제로 정의하되, 큰 app의 실수가 더 크게 반영되도록 GPU-h로 가중한다.</p>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>정의</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>결정 시점</td>
+<td>day t가 끝날 때 → day t+1에 회수할 app 결정</td>
+</tr>
+<tr>
+<td>단위</td>
+<td>app × day</td>
+</tr>
+<tr>
+<td>target</td>
+<td>내일 idle (내일 idle 비율 ≥ 0.9)</td>
+</tr>
+<tr>
+<td>가중치</td>
+<td>내일 GPU-h (<code>gpu_hours_next</code>) — 학습과 평가 모두</td>
+</tr>
+<tr>
+<td>입력 변수</td>
+<td>23개, 6묶음: 오늘 idle(1), 이력(2), 오늘 사용량(6), 규모(5), 메타(8), 달력(1)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>표: <code>data/01_dataset_splits.csv</code> — 내일 idle 비율은 건수로 35.7%, GPU-h로는 8.4%. 큰 app일수록 잘 쉬지 않는다는 뜻이다.</li>
+<li>발표 노트: 맞바꾸는 두 지표는 <strong>회수 GPU-h(클수록 좋음)</strong>와 <strong>잘못 회수(작을수록 좋음)</strong>다. 한쪽만 보면 안 된다.</li>
+</ul>
+<h3 class="slide">S5. 평가 설계</h3>
+<p><strong>핵심 메시지:</strong> 운영과 똑같이, 과거로 학습해서 다음 주를 예측하고, 같은 조건에서 비교한다.</p>
+<ul>
+<li>분할: train 0–132, val 133–139, <strong>test 140–146, 홀드아웃 147–180</strong> (홀드아웃은 개발에 전혀 쓰지 않음)</li>
+<li><strong>walk-forward:</strong> 6주 각각을 그 주 직전까지의 데이터로 다시 학습해서 예측한다. 라벨이 하루 늦게 나오므로 <code>day ≤ 주 시작 − 2</code>로 학습한다.</li>
+<li><strong>같은 조건 비교:</strong> 매일 B1과 같은 개수를 회수하게 해서, 누구를 고르느냐만 비교한다.</li>
+<li><strong>불확실성:</strong> app 단위 부트스트랩 95% 구간, seed 5개.</li>
+<li>그림 제안: 시간 축 위에 학습 구간과 예측 주를 6줄로 그린 간단한 도식. 직접 그리면 된다.</li>
+</ul>
+<h3 class="slide">S6. 기준선이 이미 강하다</h3>
+<p><strong>핵심 메시지:</strong> 오늘 idle인 app은 내일도 idle일 확률이 96%다. 그래서 단순 규칙만으로도 idle GPU-h의 90%를 회수한다.</p>
+<ul>
+<li>표 (<code>data/02_state_transition_holdout.csv</code>, 홀드아웃):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>오늘 → 내일</th>
+<th>행 비율</th>
+<th>내일 GPU-h 비율</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>busy → busy</td>
+<td>64.4%</td>
+<td>90.3%</td>
+</tr>
+<tr>
+<td>idle → idle</td>
+<td>32.3%</td>
+<td>7.5%</td>
+</tr>
+<tr>
+<td>busy → idle</td>
+<td>1.8%</td>
+<td>0.8%</td>
+</tr>
+<tr>
+<td>idle → busy</td>
+<td>1.5%</td>
+<td>1.4%</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>B1 성적 (홀드아웃): F1 <strong>0.873</strong>, precision 0.847, recall <strong>0.899</strong>. 잘못 회수는 1,453건으로 회수의 4.3%다.</li>
+<li>발표 노트:<ul>
+<li>상태가 바뀌는 경우는 전체 GPU-h의 2.2%뿐이다. 모델이 개선할 수 있는 여지가 원래 작다.</li>
+<li>그런데 잘못 회수 1,453건(4.3%)이 GPU-h로는 15%를 차지한다. <strong>틀리는 건 큰 app</strong>이다. 잘못 회수한 app-day는 평균 423 GPU-h이고, 맞게 회수한 app-day는 평균 106 GPU-h다.</li>
+<li>이 점이 모델이 노릴 지점이다.</li>
+</ul>
+</li>
+<li>참고: 팀원 v2 노트북의 상태 변화 분석도 같은 결론이다.</li>
+</ul>
+<h3 class="slide">S7. 모델 비교</h3>
+<p><strong>핵심 메시지:</strong> 같은 개수를 회수할 때, 부스팅 모델만 B1보다 덜 위험하다. 선형 모델과 SVM은 오히려 나쁘다.</p>
+<ul>
+<li>그림: <code>figures/fig04_model_comparison_ci.png</code></li>
+</ul>
+<div class="fig"><img src="figures/fig04_model_comparison_ci.png"></div>
+
+<ul>
+<li>표 (<code>data/04_model_comparison_main_policy.csv</code>, 홀드아웃, 같은 개수):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>방법</th>
+<th>F1</th>
+<th>잘못 회수 GPU-h (B1 대비)</th>
+<th>잘못 회수 건수 (B1 대비)</th>
+<th>회수 GPU-h (B1 대비)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Baseline 1</td>
+<td>0.873</td>
+<td>614,491</td>
+<td>1,453</td>
+<td>3,414,183</td>
+</tr>
+<tr>
+<td>Baseline 2 (sm_util 하위 N)</td>
+<td>0.638</td>
+<td>+1,456,496</td>
+<td>+8,417</td>
+<td>−665,986</td>
+</tr>
+<tr>
+<td>Logistic Regression</td>
+<td>0.864</td>
+<td>−8,889</td>
+<td><strong>+305</strong></td>
+<td>−68,636</td>
+</tr>
+<tr>
+<td>SVM</td>
+<td>0.868</td>
+<td>−69,739</td>
+<td><strong>+243</strong></td>
+<td>−87,603</td>
+</tr>
+<tr>
+<td>Random Forest</td>
+<td>0.875</td>
+<td>−12,208</td>
+<td>−30</td>
+<td>+4,373</td>
+</tr>
+<tr>
+<td>LightGBM</td>
+<td>0.879</td>
+<td>−61,784</td>
+<td><strong>−32</strong></td>
+<td>−2,252</td>
+</tr>
+<tr>
+<td>XGBoost</td>
+<td>0.881</td>
+<td><strong>−77,139</strong></td>
+<td>+1</td>
+<td>−958</td>
+</tr>
+<tr>
+<td><strong>최종 (LGBM+XGB 평균)</strong></td>
+<td><strong>0.882</strong></td>
+<td><strong>−77,687</strong></td>
+<td>−11</td>
+<td>+1,300</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>굵은 글씨 = 95% 구간에서 유의(<code>data/05_bootstrap_ci.csv</code>).</li>
+<li>하이퍼파라미터: 4주 rolling CV + Optuna로 골랐다(v3 노트북). 최종 실행에서는 고정했다.</li>
+<li>발표 노트: test 1주(140–146)만 보면 모든 모델이 B1과 거의 같다(최종 모델 F1 0.8796 대 B1 0.8797). 차이는 홀드아웃에서 나타난다. 1주만으로 평가하면 위험한 이유다.</li>
+</ul>
+<h3 class="slide">S8. 최종 모델 결과</h3>
+<p><strong>핵심 메시지:</strong> 최종 모델은 B1과 같은 양을 회수하면서, 잘못 회수로 깨우는 작업을 12.6% 줄인다.</p>
+<ul>
+<li>최종 모델: <strong>LightGBM + XGBoost 확률 평균</strong>, 운영 규칙은 <strong>매일 B1과 같은 개수 회수</strong></li>
+<li>홀드아웃 5주, B1 대비, 95% 구간 (<code>data/05_bootstrap_ci.csv</code>):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>지표</th>
+<th>B1</th>
+<th>최종 모델</th>
+<th>차이 [95% 구간]</th>
+<th>판정</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>회수 GPU-h</td>
+<td>3,414,183</td>
+<td>3,415,483</td>
+<td>+1,372 [−9,260, +17,360]</td>
+<td>같음</td>
+</tr>
+<tr>
+<td>잘못 회수 GPU-h</td>
+<td>614,491</td>
+<td>536,803</td>
+<td><strong>−78,050 [−160,400, −16,410]</strong></td>
+<td>유의하게 감소 (−12.6%)</td>
+</tr>
+<tr>
+<td>잘못 회수 건수</td>
+<td>1,453</td>
+<td>1,442</td>
+<td>−11 [−28, +5]</td>
+<td>차이 없음</td>
+</tr>
+<tr>
+<td>F1</td>
+<td>0.873</td>
+<td>0.882</td>
+<td><strong>+0.009 [+0.002, +0.018]</strong></td>
+<td>유의하게 증가</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>주별 그림: <code>figures/fig09_weekly_effect.png</code> — 6주 모두 감소했지만 크기는 주마다 다르다(<code>data/09</code>).</li>
+</ul>
+<div class="fig"><img src="figures/fig09_weekly_effect.png"></div>
+
+<ul>
+<li>발표 노트: 건수 차이는 유의하지 않다. 줄어드는 건 건수가 아니라 <strong>큰 app의 실수</strong>다.</li>
+<li><strong>주의 (반드시 말할 것):</strong><ul>
+<li>감소량의 65%가 한 주(161–167)에서 나왔다.</li>
+<li>app으로 보면 상위 2개가 62%, 상위 5개가 88%다(<code>data/08</code>).</li>
+<li>정리하면 "큰 실수 몇 건을 막아 준다"는 것이다.</li>
+</ul>
+</li>
+</ul>
+<h3 class="slide">S9. 운영점 선택 — 회수 개수를 조절하면 (핵심 그림)</h3>
+<p><strong>핵심 메시지:</strong> 같은 개수를 회수하면 모델은 항상 단순 규칙보다 덜 위험하다. 특히 B1보다 조금 덜 회수하는 구간에서 차이가 크다.</p>
+<ul>
+<li>그림: <code>figures/fig06_count_ratio_curve.png</code>. 왼쪽은 위험, 오른쪽은 회수량이다. 가로축은 하루 회수 개수(B1 대비 %)다.</li>
+</ul>
+<div class="fig"><img src="figures/fig06_count_ratio_curve.png"></div>
+
+<ul>
+<li>표 (<code>data/07_count_ratio_bootstrap_holdout.csv</code>, 홀드아웃, 최종 모델 대 같은 비율의 단순 규칙):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>하루 회수 개수</th>
+<th>회수 GPU-h 차이</th>
+<th>잘못 회수 GPU-h 차이</th>
+<th>잘못 회수 건수 차이</th>
+<th>F1 차이</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>85%</td>
+<td>−94,726 (−3.3%)</td>
+<td><strong>−308,304 (−68%)</strong></td>
+<td><strong>−198</strong></td>
+<td>+0.020 (유의 아님)</td>
+</tr>
+<tr>
+<td><strong>90%</strong></td>
+<td><strong>−49,401 (−1.6%)</strong></td>
+<td><strong>−229,076 (−48%)</strong></td>
+<td><strong>−156 (−20%)</strong></td>
+<td><strong>+0.019</strong></td>
+</tr>
+<tr>
+<td>95%</td>
+<td>−29,176 (유의 아님)</td>
+<td><strong>−94,071 (−18%)</strong></td>
+<td><strong>−88</strong></td>
+<td>+0.006 (유의 아님)</td>
+</tr>
+<tr>
+<td>100%</td>
+<td>+1,372 (유의 아님)</td>
+<td><strong>−78,046 (−13%)</strong></td>
+<td>−11 (유의 아님)</td>
+<td><strong>+0.009</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>90% 운영을 지금의 B1(100%)과 비교하면: 회수 −11.5%, 잘못 회수 GPU-h <strong>−59%</strong>, 잘못 회수 건수 <strong>−57%</strong>.</li>
+<li>90%에서는 이득이 덜 몰려 있다. 기여한 app이 282개이고, 상위 5개가 69%다(<code>data/08</code>). 100%일 때(61개, 88%)보다 고르게 퍼져 있다.</li>
+<li>발표 노트:<ul>
+<li>B1은 곡선의 '무릎'에 있다. 거기서는 개선 여지가 가장 작다.</li>
+<li>운영자가 회수량을 조금 양보할 수 있다면, 모델은 위험을 절반 가까이 줄인다.</li>
+<li>개수만 정하면 되므로(그날 B1 개수 × 0.9) 운영에서 바로 쓸 수 있다.</li>
+</ul>
+</li>
+<li><strong>주의:</strong> 90%라는 값은 이 분석에서 사후에 고른 예시다. "어느 운영점이든 모델이 단순 규칙보다 낫다"가 주장이고, 90%는 하나의 예다.</li>
+</ul>
+<h3 class="slide">S10. 모델은 무엇을 다르게 고르나</h3>
+<p><strong>핵심 메시지:</strong> 모델은 "내일 깨어날 큰 app"을 빼고 "작은 idle app"을 넣는다.</p>
+<ul>
+<li>그림: <code>figures/fig10_swap.png</code> (<code>data/10_swap_holdout.csv</code>). 홀드아웃에서 B1과 서로 다르게 고른 app-day는 각각 63개다.</li>
+</ul>
+<div class="fig"><img src="figures/fig10_swap.png"></div>
+
+<table>
+<thead>
+<tr>
+<th></th>
+<th>모델이 뺀 것 (B1만 회수)</th>
+<th>모델이 넣은 것 (모델만 회수)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>내일 실제 idle 비율</td>
+<td>40%</td>
+<td>57%</td>
+</tr>
+<tr>
+<td>내일 GPU-h 중앙값</td>
+<td>120</td>
+<td>48</td>
+</tr>
+<tr>
+<td>잘못 회수 시 깨우는 GPU-h 합</td>
+<td>82,735</td>
+<td>5,048</td>
+</tr>
+<tr>
+<td>offline 비율</td>
+<td>38%</td>
+<td>21%</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>발표 노트: 맞바꾼 것은 63건뿐이지만, 뺀 쪽이 큰 app이라 깨우는 GPU-h가 82.7k에서 5.0k로 줄었다. 이것이 S8의 −78k다.</li>
+</ul>
+<h3 class="slide">S11. 변수 해석 — 무엇이 순위를, 무엇이 운영 이득을 만드나</h3>
+<p><strong>핵심 메시지:</strong> 모델은 주로 "오늘과 최근의 idle 이력"을 본다. 하지만 운영 이득은 '규모' 변수에서 나온다.</p>
+<ul>
+<li>그림 1: <code>figures/fig11_shap.png</code> — 변수 기여도 상위 10 (<code>data/11</code>, <code>data/12</code>)<ul>
+<li>묶음별 평균 |SHAP| (LightGBM): 오늘 idle 2.61 &gt; 이력 1.84 &gt; 규모 0.70 &gt; 오늘 사용량 0.27 &gt; 메타 0.21 &gt; 달력 0.12</li>
+</ul>
+</li>
+</ul>
+<div class="fig"><img src="figures/fig11_shap.png"></div>
+
+<ul>
+<li>그림 2: <code>figures/fig13_feature_groups.png</code> — 변수 묶음을 차례로 더할 때 (<code>data/13</code>, v4 E3, LightGBM, 홀드아웃)<ul>
+<li>점수 순서 품질(AP): 오늘 idle만 0.847 → +이력 <strong>0.929</strong> → … → 전체 0.946. <strong>이력이 가장 큰 향상</strong></li>
+<li>운영 이득(같은 개수, 잘못 회수 GPU-h): +이력까지는 오히려 +14.8k → <strong>+규모에서 −59k</strong></li>
+</ul>
+</li>
+</ul>
+<div class="fig"><img src="figures/fig13_feature_groups.png"></div>
+
+<ul>
+<li>발표 노트: SHAP가 큰 변수와 운영 이득을 만드는 변수는 다르다. 규모 변수는 기여도가 작지만 "누구를 빼야 하는지"를 결정한다.</li>
+</ul>
+<h3 class="slide">S12. 결과는 믿을 만한가 (견고성)</h3>
+<p><strong>핵심 메시지:</strong> seed를 바꿔도, 학습 기간을 바꿔도 결론은 같다.</p>
+<ul>
+<li>그림: <code>figures/fig14_seeds.png</code> (<code>data/14_seeds_v4.csv</code>). 홀드아웃, 같은 개수, seed 5개.<ul>
+<li>LightGBM: 잘못 회수 GPU-h −60.5k ~ −74.5k, 건수 −23 ~ −36. <strong>모두 감소</strong></li>
+<li>XGBoost: 잘못 회수 GPU-h −73.3k ~ −82.0k, 건수 −1 ~ +7</li>
+</ul>
+</li>
+</ul>
+<div class="fig"><img src="figures/fig14_seeds.png"></div>
+
+<ul>
+<li>학습 기간 (<code>data/15_train_window_v4.csv</code>): 전체 과거, 최근 56일, 최근 28일의 AP가 0.9455, 0.9475, 0.9458로 차이가 없다. 최근 데이터만 쓸 이유(분포 변화)가 없다.</li>
+<li>workload별 (<code>data/17_workload_holdout.csv</code>): offline은 행의 8.6%뿐인데 잘못 회수 GPU-h 감소의 65%(−50.1k)가 offline에서 나왔다. offline F1은 +0.019, online은 +0.005다.</li>
+</ul>
+<h3 class="slide">S13. 가치 — 운영 관점에서 얼마인가</h3>
+<p><strong>핵심 메시지:</strong> 회수 규칙은 주당 GPU 약 4,200장 분량을 비운다. 모델은 이 양을 유지하면서 위험을 줄이거나, 조금 양보하고 위험을 크게 줄이는 선택지를 준다.</p>
+<ul>
+<li>표 (<code>data/19_value_per_week_by_operating_point.csv</code>, 홀드아웃 34일을 주당으로 환산):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>주당</th>
+<th>B1 (지금)</th>
+<th>최종 모델 (100%)</th>
+<th>최종 모델 (90%)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>회수 GPU-h</td>
+<td>702,920</td>
+<td>703,188</td>
+<td>622,002</td>
+</tr>
+<tr>
+<td>GPU 대수 환산 (÷168시간)</td>
+<td>4,184장</td>
+<td>4,186장</td>
+<td>3,702장</td>
+</tr>
+<tr>
+<td>잘못 회수로 깨우는 GPU-h</td>
+<td>126,513</td>
+<td>110,518 (−12.6%)</td>
+<td>50,998 (−60%)</td>
+</tr>
+<tr>
+<td>잘못 회수 건수</td>
+<td>299</td>
+<td>297</td>
+<td>128 (−57%)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>가치 세 가지(발표 노트):<ol>
+<li><strong>직접 가치:</strong> 같은 양을 회수하면서 큰 서비스를 덜 깨운다.</li>
+<li><strong>도입 비용이 낮음:</strong> 하루 회수 개수만 정하면 되고 threshold 조정이 없다. 지금 규칙을 그대로 바꿔 끼울 수 있다.</li>
+<li><strong>분석에서 나온 가치:</strong><ul>
+<li>회수량을 늘리려는 투자는 효과가 작다(B1이 이미 90%).</li>
+<li>위험은 큰 app에 몰려 있다.</li>
+<li>cold start의 주원인은 하루 단위 회수다(S14).</li>
+</ul>
+</li>
+</ol>
+</li>
+<li><strong>주의:</strong><ul>
+<li>"깨우는 GPU-h"는 방해받는 서비스 규모를 나타낸다. 그만큼 돈을 잃는다는 뜻은 아니다.</li>
+<li>금액 환산은 넣지 않는 것을 권한다. 넣는다면 단가 가정을 밝히고, 그 금액은 모델이 아니라 회수 프로그램 전체의 규모라고 말해야 한다.</li>
+</ul>
+</li>
+</ul>
+<h3 class="slide">S14. 한계와 다음 단계</h3>
+<p><strong>핵심 메시지:</strong> 하루 단위 라벨로는 cold start를 다 잡을 수 없다.</p>
+<ul>
+<li>그림: <code>figures/fig16_coldstart_5min.png</code> (<code>data/16_sim_5min_test.csv</code>, test 주 오늘 140–145)<ul>
+<li>B1이 회수한 app-day 5,809개 중 <strong>2,453개(42%)가 다음날 한 번 이상 활동</strong>했다. 첫 활동까지 걸린 시간은 중앙값 <strong>5.5시간</strong>이다.</li>
+<li>일 단위 라벨로 '잘못 회수'인 것은 4%뿐이다. 나머지 38%는 "거의 idle"이지만 잠깐씩 요청이 온다.</li>
+<li>최종 모델도 2,453건으로 같다. 어떤 모델도 이 비율을 낮추지 못했다.</li>
+</ul>
+</li>
+</ul>
+<div class="fig"><img src="figures/fig16_coldstart_5min.png"></div>
+
+<ul>
+<li>한계:<ol>
+<li>5분 데이터가 test 1주뿐이다. 그런데 그 주에는 모델과 B1의 차이가 거의 없었다. 그래서 <strong>모델의 이득을 5분 단위로는 검증하지 못했다.</strong></li>
+<li>같은 개수에서의 이득(100%)은 소수 대형 app에 몰려 있다.</li>
+<li>trace는 Alibaba 한 곳의 6개월 데이터다.</li>
+</ol>
+</li>
+<li>다음 단계:<ul>
+<li>하루보다 짧은 단위(시간 단위)로 회수하기</li>
+<li>되살리는 시간 줄이기(모델 미리 적재, 가중치 캐시)</li>
+<li>운영점(회수 개수 비율)을 정하는 기준 마련하기</li>
+</ul>
+</li>
+</ul>
+<h3 class="slide">S15. 결론</h3>
+<ul>
+<li>한 줄 결론(0절)을 그대로 쓴다.</li>
+<li>세 줄로 정리하면:<ol>
+<li>단순 규칙이 이미 idle GPU-h의 90%를 회수한다. 회수량을 더 늘릴 여지는 작다.</li>
+<li>모델은 같은 개수에서 언제나 덜 위험하다. B1과 같은 개수에서 −13%, 90% 운영에서는 단순 규칙 대비 −48%다.</li>
+<li>cold start의 42%는 하루 단위 회수의 한계다. 다음 투자처는 더 짧은 회수 단위다.</li>
+</ol>
+</li>
+</ul>
+<hr />
+<h2>2. 부록 슬라이드 (질의응답 대비)</h2>
+<h3 class="slide">A1. 제안 이후 바꾼 점</h3>
+<table>
+<thead>
+<tr>
+<th>제안서</th>
+<th>최종</th>
+<th>이유</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(instance, day) 단위</td>
+<td>(app, day) 단위</td>
+<td>offline 인스턴스는 대부분 하루만 살아서, 인스턴스 단위로는 다음날 라벨이 생기지 않음</td>
+</tr>
+<tr>
+<td>라벨 기준 τ를 val에서 조정</td>
+<td>τ = 0.9 고정</td>
+<td>"거의 idle"을 해석하기 쉬운 기준으로 고정하고 모델 비교에 집중</td>
+</tr>
+<tr>
+<td>성공 = 같은 위험에서 더 많이 회수</td>
+<td>같은 개수에서 덜 위험하게 회수</td>
+<td>정답을 알아도 더 회수할 여지가 +1.3%뿐(v4 E1). 이 사실 자체가 발견</td>
+</tr>
+<tr>
+<td>test 1주로 평가</td>
+<td>test 주 + 홀드아웃 5주 walk-forward</td>
+<td>1주 결과는 흔들림(test 주에서는 모든 모델 ≈ B1)</td>
+</tr>
+</tbody>
+</table>
+<h3 class="slide">A2. 초기 분석(v2) 대비</h3>
+<ul>
+<li><code>data/20_v2_test_week_reference.csv</code>. v2는 test 1주에서 LightGBM이 잘못 회수 GPU-h −49%, F1 +0.016이었다.</li>
+<li>그런데 v2의 모델은 B1보다 덜 회수하는 지점에 있었다(recall 0.867 대 0.890).</li>
+<li>같은 회수량으로 맞춰 다시 보면:<ul>
+<li>단순 규칙도 잘못 회수 GPU-h가 99k에서 86k로 줄어든다.</li>
+<li>모델은 49k다. 즉 v2의 −49% 중 일부는 덜 회수한 효과이고, 나머지는 모델의 순위 덕분이다.</li>
+</ul>
+</li>
+<li>이 관찰을 일반화한 것이 S9의 곡선이다.</li>
+<li>바뀐 점:<ul>
+<li>같은 조건에서 비교</li>
+<li>6주 walk-forward</li>
+<li>부트스트랩 신뢰구간</li>
+<li>Optuna 튜닝</li>
+<li>SVM 전체 데이터 학습</li>
+<li>5분 단위 시뮬레이션</li>
+<li>SHAP와 변수 묶음 실험</li>
+<li>seed 견고성</li>
+</ul>
+</li>
+</ul>
+<h3 class="slide">A3. 직전 주에서 threshold를 고르는 정책은 왜 주 정책이 아닌가</h3>
+<ul>
+<li><code>data/05_bootstrap_ci.csv</code>의 <code>위험 맞춤 GPU-h (직전 주)</code>(홀드아웃, 최종 모델):<ul>
+<li>회수: <strong>+26,410 [+14,690, +43,110]</strong></li>
+<li>잘못 회수 건수: <strong>+246 [+204, +291]</strong></li>
+</ul>
+</li>
+<li>회수가 느는 만큼 cold start 건수도 늘어난다. 한쪽 위험(GPU-h)을 맞추면 다른 쪽 위험(건수)이 늘어나는 셈이다.</li>
+<li>같은 개수 정책은 이 문제가 없다.</li>
+</ul>
+<h3 class="slide">A4. 예상 질문</h3>
+<table>
+<thead>
+<tr>
+<th>질문</th>
+<th>답</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>test 주에서 모델이 B1과 같은데 왜 좋다고 하나?</td>
+<td>test 1주는 변화가 적은 주다. 6주 walk-forward와 홀드아웃 5주에서 일관되게(6주 모두 감소) 나타났고, 부트스트랩 구간이 0을 넘지 않는다</td>
+</tr>
+<tr>
+<td>이득이 큰 app 몇 개 덕분 아닌가?</td>
+<td>맞다(100%에서 상위 5개 88%). GPU-h 기준으로는 큰 app 하나의 cold start가 작은 app 수백 개보다 크기 때문에, 그걸 피하는 것이 운영상 의미 있다. 90% 운영에서는 282개 app에 퍼져 있다</td>
+</tr>
+<tr>
+<td>더 복잡한 모델이면 회수량이 늘지 않나?</td>
+<td>정답을 보고 맞춰도 +1.3%가 상한이다. 문제의 성격상 한계다</td>
+</tr>
+<tr>
+<td>왜 τ=0.9인가?</td>
+<td>"거의 idle"의 직관적 기준. τ를 바꾸면 라벨 자체가 바뀌므로 비교를 위해 고정했다</td>
+</tr>
+<tr>
+<td>cold start 비용을 직접 재지 않았나?</td>
+<td>5분 단위 시뮬레이션으로 건수와 첫 활동 시각을 셌다. 다만 5분 데이터가 test 1주뿐이라 홀드아웃 효과는 일 단위로만 확인했다</td>
+</tr>
+<tr>
+<td>가중치 없이 학습하면?</td>
+<td>모든 모델이 내일 GPU-h 가중치로 학습했다. 목표 지표가 GPU-h이기 때문이다</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>3. 파일 목록</h2>
+<h3>그림 (<code>figures/</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>파일</th>
+<th>슬라이드</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fig04_model_comparison_ci.png</td>
+<td>S7</td>
+<td>모델별 B1 대비 잘못 회수 GPU-h·건수, 95% 구간</td>
+</tr>
+<tr>
+<td>fig06_count_ratio_curve.png</td>
+<td>S9</td>
+<td>회수 개수 비율별 위험·회수량 곡선 (단순 규칙 대 최종)</td>
+</tr>
+<tr>
+<td>fig09_weekly_effect.png</td>
+<td>S8</td>
+<td>주별 잘못 회수 GPU-h 변화</td>
+</tr>
+<tr>
+<td>fig10_swap.png</td>
+<td>S10</td>
+<td>모델이 뺀 것과 넣은 것 비교</td>
+</tr>
+<tr>
+<td>fig11_shap.png</td>
+<td>S11</td>
+<td>변수 기여도 상위 10</td>
+</tr>
+<tr>
+<td>fig13_feature_groups.png</td>
+<td>S11</td>
+<td>변수 묶음을 더할 때 AP와 운영 이득</td>
+</tr>
+<tr>
+<td>fig14_seeds.png</td>
+<td>S12</td>
+<td>seed 5개 결과</td>
+</tr>
+<tr>
+<td>fig16_coldstart_5min.png</td>
+<td>S14</td>
+<td>회수한 app의 다음날 (5분 단위)</td>
+</tr>
+</tbody>
+</table>
+<h3>원본값 (<code>data/</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>파일</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01_dataset_splits.csv</td>
+<td>구간별 행·app 수, 내일 idle 비율</td>
+</tr>
+<tr>
+<td>02_state_transition_holdout.csv</td>
+<td>오늘→내일 상태 전이 (홀드아웃)</td>
+</tr>
+<tr>
+<td>03_model_comparison_all.csv</td>
+<td>모든 방법 × 정책 × 구간 결과</td>
+</tr>
+<tr>
+<td>04_model_comparison_main_policy.csv</td>
+<td>주 정책(같은 개수) 결과</td>
+</tr>
+<tr>
+<td>05_bootstrap_ci.csv</td>
+<td>부트스트랩 95% 구간과 판정</td>
+</tr>
+<tr>
+<td>06_count_ratio_curve.csv</td>
+<td>회수 개수 비율 80–110% 곡선 원본</td>
+</tr>
+<tr>
+<td>07_count_ratio_bootstrap_holdout.csv</td>
+<td>비율별 부트스트랩 (대 B1, 대 단순 규칙)</td>
+</tr>
+<tr>
+<td>08_concentration_holdout.csv</td>
+<td>이득의 app 집중도</td>
+</tr>
+<tr>
+<td>09_weekly_final_samecount.csv</td>
+<td>주별 결과 (최종 모델)</td>
+</tr>
+<tr>
+<td>10_swap_holdout.csv</td>
+<td>B1과 다르게 고른 app-day 특징</td>
+</tr>
+<tr>
+<td>11_shap_feature.csv / 12_shap_group.csv</td>
+<td>SHAP 변수별·묶음별</td>
+</tr>
+<tr>
+<td>13_feature_group_ablation_v4.csv</td>
+<td>변수 묶음 더하기/빼기 (v4)</td>
+</tr>
+<tr>
+<td>14_seeds_v4.csv</td>
+<td>seed 5개 (v4)</td>
+</tr>
+<tr>
+<td>15_train_window_v4.csv</td>
+<td>학습 기간 (v4)</td>
+</tr>
+<tr>
+<td>16_sim_5min_test.csv</td>
+<td>5분 단위 시뮬레이션</td>
+</tr>
+<tr>
+<td>17_workload_holdout.csv</td>
+<td>online/offline별</td>
+</tr>
+<tr>
+<td>18_value_per_week.csv / 19_value_per_week_by_operating_point.csv</td>
+<td>주당 환산 가치</td>
+</tr>
+<tr>
+<td>20_v2_test_week_reference.csv</td>
+<td>팀원 v2 노트북 test 주 결과</td>
+</tr>
+<tr>
+<td>numbers.json</td>
+<td>본문에 쓴 주요 숫자</td>
+</tr>
+</tbody>
+</table>
+<h3>재현</h3>
+<table>
+<thead>
+<tr>
+<th>산출물</th>
+<th>위치</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>최종 노트북</td>
+<td><code>notebooks/2026_maas_analysis_final.executed.ipynb</code> (생성기 <code>scripts/make_final_notebook.py</code>, 실행 <code>scripts/run_final.sh</code>)</td>
+</tr>
+<tr>
+<td>견고성 실험 (seed, 변수 묶음, 학습 기간)</td>
+<td><code>notebooks/2026_maas_analysis_v4_robust.executed.ipynb</code></td>
+</tr>
+<tr>
+<td>튜닝</td>
+<td><code>notebooks/2026_maas_analysis_v3_gpu.executed.ipynb</code></td>
+</tr>
+</tbody>
+</table>
+<p>이 보고서의 그림과 표를 다시 만드는 명령:</p>
+<pre><code class="language-bash">env-gpu/bin/python scripts/make_slide_report.py
+</code></pre></body></html>
