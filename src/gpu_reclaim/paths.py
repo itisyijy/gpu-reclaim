@@ -27,12 +27,13 @@ FIRST_DAY, LAST_DAY = 0, 181
 MISSING_DAYS = (172,)
 WEEK_DAYS = (140, 146)  # instance_week_5min, app_metrics 범위
 
-# 제안서 3.2 시간 분할 (양끝 포함)
+# 시간 분할 (양끝 포함). 노트북(v3·v4·final)과 같은 값.
+# day 181은 다음날 라벨이 없어 어느 분할에도 넣지 않는다.
 SPLITS = {
     "train": (0, 132),
     "val": (133, 139),
     "test": (140, 146),
-    "holdout": (147, 181),
+    "holdout": (147, 180),
 }
 
 
@@ -40,4 +41,4 @@ def split_of(day: int) -> str:
     for name, (lo, hi) in SPLITS.items():
         if lo <= day <= hi:
             return name
-    raise ValueError(f"day {day} is outside 0–181")
+    raise ValueError(f"day {day} is outside the splits (0–180)")
